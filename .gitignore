@@ -1,0 +1,18 @@
+
+# .NET / Visual Studio / VS Code build files
+bin/
+obj/
+.vs/
+.vscode/
+
+# User-specific settings
+*.user
+*.suo
+
+# Logs
+*.log
+
+# Local environment files
+.env
+.env.*
+!.env.example
