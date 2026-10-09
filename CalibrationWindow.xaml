@@ -1,0 +1,47 @@
+<Window x:Class="CustomCursor.CalibrationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        WindowState="Maximized"
+        WindowStartupLocation="Manual"
+        AllowsTransparency="True"
+        Background="#D9101722"
+        ShowInTaskbar="False"
+        ShowActivated="True"
+        Topmost="True"
+        KeyDown="CalibrationWindow_KeyDown">
+    <Grid>
+        <TextBlock x:Name="InstructionText"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Top"
+                   Margin="24,32,24,0"
+                   Padding="18,12"
+                   Background="#E8202935"
+                   Foreground="White"
+                   FontSize="22"
+                   TextAlignment="Center"
+                   Text="画面の点を順番に見つめてください" />
+
+        <Canvas x:Name="TargetCanvas" IsHitTestVisible="False">
+            <Ellipse x:Name="TargetHalo"
+                     Width="34" Height="34"
+                     Fill="#55FFFFFF"
+                     Stroke="White"
+                     StrokeThickness="2" />
+            <Ellipse x:Name="TargetDot"
+                     Width="12" Height="12"
+                     Fill="#FFFF4D4D"
+                     Stroke="White"
+                     StrokeThickness="1" />
+        </Canvas>
+
+        <Button Content="キャンセル（Esc）"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="16,0,16,28"
+                Padding="18,9"
+                FontSize="16"
+                Click="CancelButton_Click" />
+    </Grid>
+</Window>

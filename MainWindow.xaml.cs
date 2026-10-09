@@ -1,9 +1,12 @@
 ﻿using System;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
+using Point = System.Windows.Point;
 
 namespace CustomCursor
 {
@@ -20,6 +23,27 @@ namespace CustomCursor
         // ==================================================
 
         private readonly Forms.NotifyIcon trayIcon;
+
+        private GazeCalibration calibration = GazeCalibration.Load();
+        private CameraService? cameraService;
+        private FaceDetector? faceDetector;
+        private GazeDetector? gazeDetector;
+        private CalibrationWindow? calibrationWindow;
+        private readonly List<CalibrationObservation> calibrationObservations = new();
+        private Task? activeFrameTask;
+        private bool isShuttingDown;
+        private bool mouseTrackingEnabled;
+        private bool cameraFramesPaused;
+        private int calibrationPointIndex;
+        private int calibrationSamplesAtPoint;
+        private double calibrationGazeXSum;
+        private double calibrationGazeYSum;
+        private DateTime calibrationPointStarted;
+        private DateTime lastValidGazeTime;
+        private GazeResult? latestGaze;
+
+        private const int SamplesPerCalibrationPoint = 20;
+        private static readonly TimeSpan CalibrationSettleTime = TimeSpan.FromMilliseconds(600);
 
         // ==================================================
         // 目ん玉君
@@ -139,6 +163,19 @@ namespace CustomCursor
             var menu =
                 new Forms.ContextMenuStrip();
 
+            var calibrateItem =
+                new Forms.ToolStripMenuItem("9点キャリブレーション");
+
+            calibrateItem.Click += StartCalibration;
+            menu.Items.Add(calibrateItem);
+
+            var useMouseItem =
+                new Forms.ToolStripMenuItem("マウス追従に切り替え");
+
+            useMouseItem.Click += UseMouseTracking;
+            menu.Items.Add(useMouseItem);
+            menu.Items.Add(new Forms.ToolStripSeparator());
+
             var exitItem =
                 new Forms.ToolStripMenuItem(
                     "終了"
@@ -167,139 +204,318 @@ namespace CustomCursor
                 UpdateCursor;
 
             timer.Start();
+
+            if (calibration.IsCalibrated && !TryStartVision(out string error))
+                trayIcon.ShowBalloonTip(4000, "目ん玉君", error, Forms.ToolTipIcon.Warning);
         }
 
         // ==================================================
         // メイン更新
         // ==================================================
 
-        private void UpdateCursor(
-            object? sender,
-            EventArgs e)
+        private void UpdateCursor(object? sender, EventArgs e)
         {
-            // ==================================================
-            // マウス位置取得
-            // ==================================================
-
-            if (!GetCursorPos(
-                    out POINT point))
+            if (gazeDetector != null && activeFrameTask == null &&
+                !cameraFramesPaused && !mouseTrackingEnabled && !isShuttingDown)
             {
+                Task frameTask = ProcessCameraFrameAsync();
+                activeFrameTask = frameTask.IsCompleted ? null : frameTask;
+            }
+
+            if (calibrationWindow != null)
+            {
+                if (DateTime.UtcNow - calibrationPointStarted > TimeSpan.FromSeconds(20))
+                {
+                    calibrationWindow.SetStatus(
+                        $"赤い点を見つめてください  ({calibrationPointIndex + 1} / 9)\n" +
+                        "顔をカメラに向け、明るさと距離を調整してください。読み取りをやり直します。");
+                    gazeDetector?.Reset();
+                    calibrationSamplesAtPoint = 0;
+                    calibrationGazeXSum = 0;
+                    calibrationGazeYSum = 0;
+                    calibrationPointStarted = DateTime.UtcNow;
+                }
+
+                UpdateBlink();
                 return;
             }
 
-            // ==================================================
-            // マウスの画面座標
-            // ==================================================
+            if (!GetCursorPos(out POINT point))
+                return;
 
-            System.Windows.Point screenPoint =
-                new System.Windows.Point(
-                    point.X,
-                    point.Y
-                );
-
-            // ==================================================
-            // DPI変換
-            // ==================================================
-
-            PresentationSource source =
-                PresentationSource.FromVisual(
-                    this
-                );
-
+            Point screenPoint = new Point(point.X, point.Y);
+            PresentationSource? source = PresentationSource.FromVisual(this);
             if (source?.CompositionTarget != null)
             {
-                screenPoint =
-                    source
-                        .CompositionTarget
-                        .TransformFromDevice
-                        .Transform(
-                            screenPoint
-                        );
+                screenPoint = source.CompositionTarget.TransformFromDevice.Transform(screenPoint);
             }
 
-            // ==================================================
-            // ホバリング
-            // ==================================================
+            if (calibration.IsCalibrated && !mouseTrackingEnabled && latestGaze?.IsValid == true &&
+                DateTime.UtcNow - lastValidGazeTime < TimeSpan.FromMilliseconds(500))
+            {
+                Point normalizedPoint = calibration.Map(latestGaze.X, latestGaze.Y);
+                screenPoint = new Point(
+                    Math.Clamp(normalizedPoint.X, 0, 1) * SystemParameters.PrimaryScreenWidth,
+                    Math.Clamp(normalizedPoint.Y, 0, 1) * SystemParameters.PrimaryScreenHeight);
+            }
 
-            hoverTime +=
-                HoverSpeed;
+            hoverTime += HoverSpeed;
+            double hoverOffset = Math.Sin(hoverTime) * HoverHeight;
 
-            double hoverOffset =
-                Math.Sin(
-                    hoverTime
-                )
-                * HoverHeight;
+            eyeTargetX = screenPoint.X - Width / 2 + EyeOffsetX;
+            eyeTargetY = screenPoint.Y - Height / 2 + EyeOffsetY + hoverOffset;
 
-            // ==================================================
-            // 目ん玉君の目標位置
-            // ==================================================
-
-            eyeTargetX =
-                screenPoint.X
-                - Width / 2
-                + EyeOffsetX;
-
-            eyeTargetY =
-                screenPoint.Y
-                - Height / 2
-                + EyeOffsetY
-                + hoverOffset;
-
-            // ==================================================
-            // 滑らかに追従
-            // ==================================================
-
-            eyeX +=
-                (
-                    eyeTargetX
-                    - eyeX
-                )
-                * EyeFollowSpeed;
-
-            eyeY +=
-                (
-                    eyeTargetY
-                    - eyeY
-                )
-                * EyeFollowSpeed;
-
-            // ==================================================
-            // ウィンドウ位置
-            // ==================================================
+            eyeX += (eyeTargetX - eyeX) * EyeFollowSpeed;
+            eyeY += (eyeTargetY - eyeY) * EyeFollowSpeed;
 
             Left = eyeX;
             Top = eyeY;
 
-            // ==================================================
-            // 瞳孔をマウス方向へ向ける
-            // ==================================================
-
-            double eyeCenterX =
-                eyeX
-                + Width / 2;
-
-            double eyeCenterY =
-                eyeY
-                + Height / 2;
-
-            double targetX =
-                screenPoint.X
-                - eyeCenterX;
-
-            double targetY =
-                screenPoint.Y
-                - eyeCenterY;
-
-            eyeBall.LookAt(
-                targetX,
-                targetY
-            );
-
-            // ==================================================
-            // まばたき
-            // ==================================================
+            double targetX = screenPoint.X - (eyeX + Width / 2);
+            double targetY = screenPoint.Y - (eyeY + Height / 2);
+            eyeBall.LookAt(targetX, targetY);
 
             UpdateBlink();
+        }
+
+        private async Task ProcessCameraFrameAsync()
+        {
+            if (cameraService == null || gazeDetector == null)
+                return;
+
+            try
+            {
+                CameraService camera = cameraService;
+                GazeDetector detector = gazeDetector;
+                GazeResult? result = await Task.Run(() =>
+                {
+                    using var frame = camera.CaptureFrame();
+                    return frame == null ? null : detector.Detect(frame);
+                });
+
+                if (result == null)
+                    return;
+
+                if (result.IsValid)
+                {
+                    latestGaze = result;
+                    lastValidGazeTime = DateTime.UtcNow;
+                    CollectCalibrationSample(result);
+                }
+            }
+            catch (Exception exception)
+            {
+                calibrationWindow?.SetStatus(
+                    $"カメラまたは検出処理でエラーが発生しました。\n{exception.Message}");
+            }
+            finally
+            {
+                activeFrameTask = null;
+            }
+        }
+
+        private bool TryStartVision(out string error)
+        {
+            try
+            {
+                faceDetector ??= new FaceDetector();
+                gazeDetector ??= new GazeDetector(faceDetector);
+                cameraService ??= new CameraService();
+
+                if (!cameraService.IsOpened && !cameraService.Start())
+                {
+                    error = "カメラを開けませんでした。接続と、他のアプリで使用中でないことを確認してください。";
+                    StopVision();
+                    return false;
+                }
+
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = $"カメラまたは顔検出器を初期化できませんでした。\n{exception.Message}";
+                StopVision();
+                return false;
+            }
+        }
+
+        private void StartCalibration(object? sender, EventArgs e)
+        {
+            if (calibrationWindow != null)
+                return;
+
+            if (!TryStartVision(out string error))
+            {
+                System.Windows.MessageBox.Show(error, "9点キャリブレーション",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            mouseTrackingEnabled = false;
+            cameraFramesPaused = false;
+            latestGaze = null;
+            gazeDetector?.Reset();
+            calibrationObservations.Clear();
+            calibrationPointIndex = 0;
+
+            calibrationWindow = new CalibrationWindow();
+            calibrationWindow.CancelRequested += CancelCalibration;
+            calibrationWindow.Closed += CalibrationWindow_Closed;
+            calibrationWindow.Show();
+            Hide();
+            ShowCalibrationPoint();
+        }
+
+        private void ShowCalibrationPoint()
+        {
+            if (calibrationWindow == null)
+                return;
+
+            if (calibrationPointIndex >= 9)
+            {
+                FinishCalibration();
+                return;
+            }
+
+            double[] positions = { 0.15, 0.50, 0.85 };
+            calibrationSamplesAtPoint = 0;
+            calibrationGazeXSum = 0;
+            calibrationGazeYSum = 0;
+            calibrationPointStarted = DateTime.UtcNow;
+
+            calibrationWindow.SetTarget(
+                calibrationPointIndex + 1,
+                positions[calibrationPointIndex % 3],
+                positions[calibrationPointIndex / 3]);
+        }
+
+        private void CollectCalibrationSample(GazeResult result)
+        {
+            if (calibrationWindow == null ||
+                DateTime.UtcNow - calibrationPointStarted < CalibrationSettleTime)
+            {
+                return;
+            }
+
+            calibrationGazeXSum += result.X;
+            calibrationGazeYSum += result.Y;
+            calibrationSamplesAtPoint++;
+            calibrationWindow.SetStatus(
+                $"赤い点を見つめてください  ({calibrationPointIndex + 1} / 9)\n" +
+                $"視線を読み取り中… {calibrationSamplesAtPoint} / {SamplesPerCalibrationPoint}");
+
+            if (calibrationSamplesAtPoint < SamplesPerCalibrationPoint)
+                return;
+
+            double[] positions = { 0.15, 0.50, 0.85 };
+            calibrationObservations.Add(new CalibrationObservation(
+                calibrationGazeXSum / calibrationSamplesAtPoint,
+                calibrationGazeYSum / calibrationSamplesAtPoint,
+                positions[calibrationPointIndex % 3],
+                positions[calibrationPointIndex / 3]));
+
+            calibrationPointIndex++;
+            ShowCalibrationPoint();
+        }
+
+        private void FinishCalibration()
+        {
+            if (calibrationWindow == null)
+                return;
+
+            if (!calibration.TryFit(calibrationObservations, out string error))
+            {
+                calibrationWindow.SetStatus(
+                    $"キャリブレーションを完了できませんでした。\n{error}\n最初からやり直します。");
+                calibrationObservations.Clear();
+                calibrationPointIndex = 0;
+                _ = RestartCalibrationAfterDelayAsync();
+                return;
+            }
+
+            try
+            {
+                calibration.Save();
+            }
+            catch (Exception exception) when (
+                exception is IOException || exception is UnauthorizedAccessException)
+            {
+                trayIcon.ShowBalloonTip(4000, "目ん玉君",
+                    "校正結果は今回の起動中のみ使用します。設定ファイルに保存できませんでした。",
+                    Forms.ToolTipIcon.Warning);
+            }
+
+            calibrationWindow.SetStatus("キャリブレーション完了！\n目ん玉君が視線を追いかけます");
+            trayIcon.Text = "目ん玉君 - 視線追跡中";
+            _ = CloseCalibrationWindowAfterDelayAsync();
+        }
+
+        private async Task RestartCalibrationAfterDelayAsync()
+        {
+            await Task.Delay(1800);
+            if (calibrationWindow == null || isShuttingDown)
+                return;
+
+            gazeDetector?.Reset();
+            ShowCalibrationPoint();
+        }
+
+        private async Task CloseCalibrationWindowAfterDelayAsync()
+        {
+            await Task.Delay(1400);
+            calibrationWindow?.Close();
+        }
+
+        private void CancelCalibration(object? sender, EventArgs e)
+        {
+            calibrationWindow?.Close();
+        }
+
+        private async void CalibrationWindow_Closed(object? sender, EventArgs e)
+        {
+            if (calibrationWindow != null)
+            {
+                calibrationWindow.CancelRequested -= CancelCalibration;
+                calibrationWindow.Closed -= CalibrationWindow_Closed;
+                calibrationWindow = null;
+            }
+
+            if (!isShuttingDown)
+                Show();
+
+            if (!isShuttingDown && (mouseTrackingEnabled || !calibration.IsCalibrated))
+            {
+                cameraFramesPaused = true;
+                if (activeFrameTask != null)
+                    await activeFrameTask;
+
+                StopVision();
+            }
+        }
+
+        private async void UseMouseTracking(object? sender, EventArgs e)
+        {
+            mouseTrackingEnabled = true;
+            latestGaze = null;
+            trayIcon.Text = "目ん玉君 - マウス追従";
+            calibrationWindow?.Close();
+
+            if (activeFrameTask != null)
+                await activeFrameTask;
+
+            StopVision();
+        }
+
+        private void StopVision()
+        {
+            cameraService?.Stop();
+            cameraService?.Dispose();
+            cameraService = null;
+
+            faceDetector?.Dispose();
+            faceDetector = null;
+            gazeDetector = null;
         }
 
         // ==================================================
@@ -395,11 +611,19 @@ namespace CustomCursor
         // 終了
         // ==================================================
 
-        private void ExitApplication(
+        private async void ExitApplication(
             object? sender,
             EventArgs e)
         {
+            isShuttingDown = true;
             timer.Stop();
+
+            calibrationWindow?.Close();
+
+            if (activeFrameTask != null)
+                await activeFrameTask;
+
+            StopVision();
 
             trayIcon.Visible = false;
 

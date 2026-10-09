@@ -52,7 +52,7 @@ namespace CustomCursor {
                 return;
             }
             _contentLoaded = true;
-            System.Uri resourceLocater = new System.Uri("/CustomCursor;V1.0.0.0;component/gazepointwindow.xaml", System.UriKind.Relative);
+            System.Uri resourceLocater = new System.Uri("/CustomCursor;component/gazepointwindow.xaml", System.UriKind.Relative);
             
             #line 1 "..\..\..\GazePointWindow.xaml"
             System.Windows.Application.LoadComponent(this, resourceLocater);

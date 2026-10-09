@@ -78,14 +78,9 @@ namespace CustomCursor
             double targetX,
             double targetY)
         {
-            double centerX = 50;
-            double centerY = 50;
-
-            double dx =
-                targetX - centerX;
-
-            double dy =
-                targetY - centerY;
+            // 呼び出し側からは目の中心を基準にした差分を受け取る。
+            double dx = targetX;
+            double dy = targetY;
 
             double distance =
                 Math.Sqrt(
