@@ -1,0 +1,38 @@
+﻿<Window x:Class="CustomCursor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        Width="100"
+        Height="100"
+        IsHitTestVisible="False">
+
+    <Canvas Background="Transparent">
+
+        <!-- 目ん玉君本体 -->
+        <Polygon x:Name="EyePolygon"
+                 Fill="Red"
+                 Stroke="Black"
+                 StrokeThickness="0.5"/>
+
+        <!-- 瞳孔 -->
+        <Ellipse x:Name="Pupil"
+                 Fill="White"/>
+
+        <!-- デバッグ表示 -->
+        <TextBlock x:Name="FaceStatusText"
+                   Visibility="Collapsed"
+                   IsHitTestVisible="False"
+                   FontSize="14"
+                   Foreground="White"
+                   Background="Black"
+                   Padding="5"/>
+
+    </Canvas>
+
+</Window>
