@@ -90,6 +90,9 @@ namespace CustomCursor
 
             if (distance < 0.001)
             {
+                pupilX = 0;
+                pupilY = 0;
+                Draw();
                 return;
             }
 

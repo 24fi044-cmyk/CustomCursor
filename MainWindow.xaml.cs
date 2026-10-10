@@ -23,6 +23,9 @@ namespace CustomCursor
         // ==================================================
 
         private readonly Forms.NotifyIcon trayIcon;
+        private Forms.ToolStripMenuItem? gazeFollowMenuItem;
+        private Forms.ToolStripMenuItem? mouseFollowMenuItem;
+        private Forms.ToolStripMenuItem? mouseWithGazeMenuItem;
 
         private GazeCalibration calibration = GazeCalibration.Load();
         private CameraService? cameraService;
@@ -32,8 +35,11 @@ namespace CustomCursor
         private readonly List<CalibrationObservation> calibrationObservations = new();
         private Task? activeFrameTask;
         private bool isShuttingDown;
-        private bool mouseTrackingEnabled;
         private bool cameraFramesPaused;
+        private bool calibrationCompletedSuccessfully;
+        private TrackingMode trackingMode = TrackingMode.Mouse;
+        private TrackingMode modeBeforeCalibration = TrackingMode.Mouse;
+        private TrackingMode modeAfterCalibration = TrackingMode.Gaze;
         private int calibrationPointIndex;
         private int calibrationSamplesAtPoint;
         private double calibrationGazeXSum;
@@ -44,6 +50,13 @@ namespace CustomCursor
 
         private const int SamplesPerCalibrationPoint = 20;
         private static readonly TimeSpan CalibrationSettleTime = TimeSpan.FromMilliseconds(600);
+
+        private enum TrackingMode
+        {
+            Gaze,
+            Mouse,
+            MouseWithGazeDirection
+        }
 
         // ==================================================
         // 目ん玉君
@@ -163,18 +176,17 @@ namespace CustomCursor
             var menu =
                 new Forms.ContextMenuStrip();
 
-            var calibrateItem =
-                new Forms.ToolStripMenuItem("9点キャリブレーション");
+            gazeFollowMenuItem = new Forms.ToolStripMenuItem("視線に追従させる");
+            gazeFollowMenuItem.Click += SelectGazeTracking;
+            menu.Items.Add(gazeFollowMenuItem);
 
-            calibrateItem.Click += StartCalibration;
-            menu.Items.Add(calibrateItem);
+            mouseFollowMenuItem = new Forms.ToolStripMenuItem("マウスに追従させる");
+            mouseFollowMenuItem.Click += SelectMouseTracking;
+            menu.Items.Add(mouseFollowMenuItem);
 
-            var useMouseItem =
-                new Forms.ToolStripMenuItem("マウス追従に切り替え");
-
-            useMouseItem.Click += UseMouseTracking;
-            menu.Items.Add(useMouseItem);
-            menu.Items.Add(new Forms.ToolStripSeparator());
+            mouseWithGazeMenuItem = new Forms.ToolStripMenuItem("マウス追従＋視線の方向を向かせる");
+            mouseWithGazeMenuItem.Click += SelectMouseWithGazeDirection;
+            menu.Items.Add(mouseWithGazeMenuItem);
 
             var exitItem =
                 new Forms.ToolStripMenuItem(
@@ -205,8 +217,7 @@ namespace CustomCursor
 
             timer.Start();
 
-            if (calibration.IsCalibrated && !TryStartVision(out string error))
-                trayIcon.ShowBalloonTip(4000, "目ん玉君", error, Forms.ToolTipIcon.Warning);
+            UpdateModeMenu();
         }
 
         // ==================================================
@@ -216,7 +227,7 @@ namespace CustomCursor
         private void UpdateCursor(object? sender, EventArgs e)
         {
             if (gazeDetector != null && activeFrameTask == null &&
-                !cameraFramesPaused && !mouseTrackingEnabled && !isShuttingDown)
+                !cameraFramesPaused && trackingMode != TrackingMode.Mouse && !isShuttingDown)
             {
                 Task frameTask = ProcessCameraFrameAsync();
                 activeFrameTask = frameTask.IsCompleted ? null : frameTask;
@@ -250,10 +261,13 @@ namespace CustomCursor
                 screenPoint = source.CompositionTarget.TransformFromDevice.Transform(screenPoint);
             }
 
-            if (calibration.IsCalibrated && !mouseTrackingEnabled && latestGaze?.IsValid == true &&
-                DateTime.UtcNow - lastValidGazeTime < TimeSpan.FromMilliseconds(500))
+            GazeResult? gazeResult = latestGaze;
+            bool gazeIsFresh = gazeResult?.IsValid == true &&
+                               DateTime.UtcNow - lastValidGazeTime < TimeSpan.FromMilliseconds(500);
+
+            if (trackingMode == TrackingMode.Gaze && calibration.IsCalibrated && gazeIsFresh)
             {
-                Point normalizedPoint = calibration.Map(latestGaze.X, latestGaze.Y);
+                Point normalizedPoint = calibration.Map(gazeResult!.X, gazeResult.Y);
                 screenPoint = new Point(
                     Math.Clamp(normalizedPoint.X, 0, 1) * SystemParameters.PrimaryScreenWidth,
                     Math.Clamp(normalizedPoint.Y, 0, 1) * SystemParameters.PrimaryScreenHeight);
@@ -273,7 +287,15 @@ namespace CustomCursor
 
             double targetX = screenPoint.X - (eyeX + Width / 2);
             double targetY = screenPoint.Y - (eyeY + Height / 2);
-            eyeBall.LookAt(targetX, targetY);
+
+            if (gazeIsFresh &&
+                (trackingMode == TrackingMode.Gaze ||
+                 trackingMode == TrackingMode.MouseWithGazeDirection))
+            {
+                eyeBall.LookAt(gazeResult!.X, gazeResult.Y);
+            }
+            else
+                eyeBall.LookAt(targetX, targetY);
 
             UpdateBlink();
         }
@@ -340,20 +362,26 @@ namespace CustomCursor
             }
         }
 
-        private void StartCalibration(object? sender, EventArgs e)
+        private void StartCalibration(TrackingMode targetMode)
         {
             if (calibrationWindow != null)
                 return;
+
+            modeBeforeCalibration = trackingMode;
+            modeAfterCalibration = targetMode;
+            calibrationCompletedSuccessfully = false;
 
             if (!TryStartVision(out string error))
             {
                 System.Windows.MessageBox.Show(error, "9点キャリブレーション",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
+                UpdateModeMenu();
                 return;
             }
 
-            mouseTrackingEnabled = false;
+            trackingMode = targetMode;
             cameraFramesPaused = false;
+            UpdateModeMenu();
             latestGaze = null;
             gazeDetector?.Reset();
             calibrationObservations.Clear();
@@ -447,7 +475,12 @@ namespace CustomCursor
             }
 
             calibrationWindow.SetStatus("キャリブレーション完了！\n目ん玉君が視線を追いかけます");
-            trayIcon.Text = "目ん玉君 - 視線追跡中";
+            calibrationCompletedSuccessfully = true;
+            trackingMode = modeAfterCalibration;
+            trayIcon.Text = trackingMode == TrackingMode.Gaze
+                ? "目ん玉君 - 視線追従"
+                : "目ん玉君 - マウス＋視線方向";
+            UpdateModeMenu();
             _ = CloseCalibrationWindowAfterDelayAsync();
         }
 
@@ -484,7 +517,16 @@ namespace CustomCursor
             if (!isShuttingDown)
                 Show();
 
-            if (!isShuttingDown && (mouseTrackingEnabled || !calibration.IsCalibrated))
+            if (!calibrationCompletedSuccessfully)
+                trackingMode = modeBeforeCalibration;
+
+            calibrationCompletedSuccessfully = false;
+            UpdateModeMenu();
+
+            bool needsVision = trackingMode == TrackingMode.MouseWithGazeDirection ||
+                               (trackingMode == TrackingMode.Gaze && calibration.IsCalibrated);
+
+            if (!isShuttingDown && !needsVision)
             {
                 cameraFramesPaused = true;
                 if (activeFrameTask != null)
@@ -494,17 +536,43 @@ namespace CustomCursor
             }
         }
 
-        private async void UseMouseTracking(object? sender, EventArgs e)
+        private void SelectGazeTracking(object? sender, EventArgs e)
         {
-            mouseTrackingEnabled = true;
+            StartCalibration(TrackingMode.Gaze);
+        }
+
+        private void SelectMouseWithGazeDirection(object? sender, EventArgs e)
+        {
+            StartCalibration(TrackingMode.MouseWithGazeDirection);
+        }
+
+        private async void SelectMouseTracking(object? sender, EventArgs e)
+        {
+            if (calibrationWindow != null)
+                return;
+
+            trackingMode = TrackingMode.Mouse;
+            cameraFramesPaused = true;
             latestGaze = null;
+            UpdateModeMenu();
             trayIcon.Text = "目ん玉君 - マウス追従";
-            calibrationWindow?.Close();
 
             if (activeFrameTask != null)
                 await activeFrameTask;
 
             StopVision();
+        }
+
+        private void UpdateModeMenu()
+        {
+            if (gazeFollowMenuItem != null)
+                gazeFollowMenuItem.Checked = trackingMode == TrackingMode.Gaze;
+
+            if (mouseFollowMenuItem != null)
+                mouseFollowMenuItem.Checked = trackingMode == TrackingMode.Mouse;
+
+            if (mouseWithGazeMenuItem != null)
+                mouseWithGazeMenuItem.Checked = trackingMode == TrackingMode.MouseWithGazeDirection;
         }
 
         private void StopVision()
