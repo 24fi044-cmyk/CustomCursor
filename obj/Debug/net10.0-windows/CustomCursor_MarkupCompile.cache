@@ -1,5 +1,5 @@
 ﻿CustomCursor
-
+1.0.0.0
 
 winexe
 C#
@@ -12,7 +12,7 @@ TRACE;DEBUG;NET;NET10_0;NETCOREAPP;WINDOWS;WINDOWS7_0;NET5_0_OR_GREATER;NET6_0_O
 C:\Users\kuro ke\Documents\CustomCursor\App.xaml
 3897194965
 
-101885101083
+12213990101
 215-1383905136
 CalibrationWindow.xaml;GazePointWindow.xaml;MainWindow.xaml;
 

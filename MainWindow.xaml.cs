@@ -36,6 +36,7 @@ namespace CustomCursor
         private Task? activeFrameTask;
         private bool isShuttingDown;
         private bool cameraFramesPaused;
+        private bool calibrationCapturePaused;
         private bool calibrationCompletedSuccessfully;
         private TrackingMode trackingMode = TrackingMode.Mouse;
         private TrackingMode modeBeforeCalibration = TrackingMode.Mouse;
@@ -235,7 +236,8 @@ namespace CustomCursor
 
             if (calibrationWindow != null)
             {
-                if (DateTime.UtcNow - calibrationPointStarted > TimeSpan.FromSeconds(20))
+                if (!calibrationCapturePaused &&
+                    DateTime.UtcNow - calibrationPointStarted > TimeSpan.FromSeconds(20))
                 {
                     calibrationWindow.SetStatus(
                         $"赤い点を見つめてください  ({calibrationPointIndex + 1} / 9)\n" +
@@ -327,6 +329,9 @@ namespace CustomCursor
             }
             catch (Exception exception)
             {
+                if (calibrationCapturePaused)
+                    return;
+
                 calibrationWindow?.SetStatus(
                     $"カメラまたは検出処理でエラーが発生しました。\n{exception.Message}");
             }
@@ -369,6 +374,7 @@ namespace CustomCursor
 
             modeBeforeCalibration = trackingMode;
             modeAfterCalibration = targetMode;
+            calibrationCapturePaused = false;
             calibrationCompletedSuccessfully = false;
 
             if (!TryStartVision(out string error))
@@ -420,7 +426,8 @@ namespace CustomCursor
 
         private void CollectCalibrationSample(GazeResult result)
         {
-            if (calibrationWindow == null ||
+            if (calibrationWindow == null || calibrationCapturePaused ||
+                calibrationCompletedSuccessfully || calibrationPointIndex >= 9 ||
                 DateTime.UtcNow - calibrationPointStarted < CalibrationSettleTime)
             {
                 return;
@@ -451,6 +458,8 @@ namespace CustomCursor
         {
             if (calibrationWindow == null)
                 return;
+
+            calibrationCapturePaused = true;
 
             if (!calibration.TryFit(calibrationObservations, out string error))
             {
@@ -491,6 +500,7 @@ namespace CustomCursor
                 return;
 
             gazeDetector?.Reset();
+            calibrationCapturePaused = false;
             ShowCalibrationPoint();
         }
 
