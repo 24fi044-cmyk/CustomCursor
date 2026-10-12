@@ -23,6 +23,7 @@ namespace CustomCursor
         // ==================================================
 
         private readonly Forms.NotifyIcon trayIcon;
+        private readonly Icon appIcon;
         private Forms.ToolStripMenuItem? gazeFollowMenuItem;
         private Forms.ToolStripMenuItem? mouseFollowMenuItem;
         private Forms.ToolStripMenuItem? mouseWithGazeMenuItem;
@@ -166,10 +167,15 @@ namespace CustomCursor
             // タスクトレイ
             // ==================================================
 
+            string appIconPath = Path.Combine(AppContext.BaseDirectory, "AppIcon.ico");
+            appIcon = File.Exists(appIconPath)
+                ? new Icon(appIconPath)
+                : (Icon)SystemIcons.Application.Clone();
+
             trayIcon =
                 new Forms.NotifyIcon
                 {
-                    Icon = SystemIcons.Application,
+                    Icon = appIcon,
                     Visible = true,
                     Text = "CustomCursor"
                 };
@@ -706,6 +712,7 @@ namespace CustomCursor
             trayIcon.Visible = false;
 
             trayIcon.Dispose();
+            appIcon.Dispose();
 
             System.Windows.Application.Current.Shutdown();
         }

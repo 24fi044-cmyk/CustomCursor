@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CustomCursor")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a99aaf0a6a687426c95d0c8bfaa8b4301d2f50e2")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c941a6c04f0d1592688a35954372c97d282d9513")]
 [assembly: System.Reflection.AssemblyProductAttribute("CustomCursor")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CustomCursor")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
